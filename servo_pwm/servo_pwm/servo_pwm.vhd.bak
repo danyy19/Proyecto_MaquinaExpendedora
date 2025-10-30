@@ -1,0 +1,95 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.round;
+
+entity servo_pwm is
+  generic (
+    clk_hz : integer:=50000000;
+    pulse_hz : integer:= 50; -- PWM pulse frequency
+    min_pulse_us : integer := 1000; -- uS pulse width at min position
+    max_pulse_us : integer := 2000; -- uS pulse width at max position
+    step_count : positive:= 5 -- Number of steps from min to max
+  );
+  port (
+    clk : in std_logic;
+    rst : in std_logic;
+    position : in integer range 0 to step_count - 1;
+    pwm : out std_logic
+  );
+end servo_pwm;
+
+
+
+-- Library Clause(s) (optional)
+-- Use Clause(s) (optional)
+
+architecture arch_servo_pwm of servo_pwm is
+
+	function cycles_per_us (us_count : integer) return integer is
+	begin
+	  return integer(clk_hz / 1000000 * us_count);
+	end function;
+
+	constant min_count : integer := cycles_per_us(min_pulse_us);
+	constant max_count : integer := cycles_per_us(max_pulse_us);
+	constant min_max_range_us : integer := max_pulse_us - min_pulse_us;
+	constant step_us : integer := min_max_range_us / integer(step_count - 1);
+	constant cycles_per_step : positive := cycles_per_us(step_us);
+	
+	constant counter_max : integer := integer(clk_hz / pulse_hz) - 1;
+	signal counter : integer range 0 to counter_max;
+  
+	signal duty_cycle : integer range 0 to max_count;
+	
+begin
+
+	COUNTER_PROC : process(clk)
+	begin
+	  if rising_edge(clk) then
+		 if rst = '1' then
+			counter <= 0;
+	  
+		 else
+			if counter < counter_max then
+			  counter <= counter + 1;
+			else
+			  counter <= 0;
+			end if;
+	  
+		 end if;
+	  end if;
+	end process;
+	
+	PWM_PROC : process(clk)
+	begin
+	  if rising_edge(clk) then
+		 if rst = '1' then
+			pwm <= '0';
+	  
+		 else
+			pwm <= '0';
+	  
+			if counter < duty_cycle then
+			  pwm <= '1';
+			end if;
+	  
+		 end if;
+	  end if;
+	end process;
+	
+	DUTY_CYCLE_PROC : process(clk)
+	begin
+	  if rising_edge(clk) then
+		 if rst = '1' then
+			duty_cycle <= min_count;
+	  
+		 else
+			duty_cycle <= position * cycles_per_step + min_count;
+	  
+		 end if;
+	  end if;
+	end process;
+
+end arch_servo_pwm;
+

@@ -1,0 +1,287 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity ControlServomotores is
+    port (
+        clk                : in std_logic;
+        reset              : in std_logic;
+        -- Señales de control
+        activar_devolucion : in std_logic;
+        monedas_5_a_devolver : in integer range 0 to 9;
+        monedas_10_a_devolver : in integer range 0 to 9;
+        activar_motor_entrega : in std_logic;
+        entrega_completada : in std_logic;
+        
+        -- Salidas a servomotores
+        servo_moneda_5     : out std_logic;
+        servo_moneda_10    : out std_logic;
+        servo_motor_entrega : out std_logic;
+        
+        -- Estados
+        devolucion_en_curso : out std_logic;
+        motor_activo       : out std_logic
+    );
+end entity;
+
+architecture comportamiento of ControlServomotores is
+
+    -- Constantes para PWM (50MHz clock)
+    constant PERIODO_PWM : integer := 1000000;  -- 20ms periodo (50Hz)
+    constant PULSO_0_GRADOS : integer := 50000;   -- 1ms pulso
+    constant PULSO_180_GRADOS : integer := 100000; -- 2ms pulso
+    constant PULSO_360_GRADOS : integer := 150000; -- 3ms pulso (modo continuo)
+
+    -- Contadores PWM
+    signal contador_pwm : integer range 0 to PERIODO_PWM := 0;
+    signal pwm_5_monedas : std_logic := '0';
+    signal pwm_10_monedas : std_logic := '0';
+    signal pwm_motor : std_logic := '0';
+
+    -- Estados para devolución
+    type estado_devolucion_t is (REPOSO, MOVER_180_5, ESPERAR_180_5, VOLVER_0_5, ESPERAR_0_5,
+                                MOVER_180_10, ESPERAR_180_10, VOLVER_0_10, ESPERAR_0_10);
+    signal estado_devolucion : estado_devolucion_t := REPOSO;
+    
+    -- Estados para motor de entrega
+    type estado_motor_t is (MOTOR_APAGADO, MOTOR_GIRANDO, MOTOR_ESPERANDO);
+    signal estado_motor : estado_motor_t := MOTOR_APAGADO;
+
+    -- Contadores de tiempo
+    signal contador_1seg : integer range 0 to 50000000 := 0;  -- 1 segundo
+    signal contador_3seg : integer range 0 to 150000000 := 0; -- 3 segundos
+    signal contador_4seg : integer range 0 to 200000000 := 0; -- 4 segundos
+    
+    -- Contadores de monedas
+    signal monedas_5_restantes : integer range 0 to 9 := 0;
+    signal monedas_10_restantes : integer range 0 to 9 := 0;
+    
+    -- Señales internas
+    signal devolucion_activa : std_logic := '0';
+    signal motor_activo_int : std_logic := '0';
+
+begin
+
+    -- Asignar salidas
+    servo_moneda_5 <= pwm_5_monedas;
+    servo_moneda_10 <= pwm_10_monedas;
+    servo_motor_entrega <= pwm_motor;
+    devolucion_en_curso <= devolucion_activa;
+    motor_activo <= motor_activo_int;
+
+    --------------------------------------------------------------------------
+    -- GENERADOR PWM PARA SERVOMOTORES
+    --------------------------------------------------------------------------
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if contador_pwm < PERIODO_PWM then
+                contador_pwm <= contador_pwm + 1;
+            else
+                contador_pwm <= 0;
+            end if;
+            
+            -- Servo moneda 5
+            if estado_devolucion = MOVER_180_5 or estado_devolucion = ESPERAR_180_5 then
+                if contador_pwm < PULSO_180_GRADOS then
+                    pwm_5_monedas <= '1';
+                else
+                    pwm_5_monedas <= '0';
+                end if;
+            else
+                if contador_pwm < PULSO_0_GRADOS then
+                    pwm_5_monedas <= '1';
+                else
+                    pwm_5_monedas <= '0';
+                end if;
+            end if;
+            
+            -- Servo moneda 10
+            if estado_devolucion = MOVER_180_10 or estado_devolucion = ESPERAR_180_10 then
+                if contador_pwm < PULSO_180_GRADOS then
+                    pwm_10_monedas <= '1';
+                else
+                    pwm_10_monedas <= '0';
+                end if;
+            else
+                if contador_pwm < PULSO_0_GRADOS then
+                    pwm_10_monedas <= '1';
+                else
+                    pwm_10_monedas <= '0';
+                end if;
+            end if;
+            
+            -- Servo motor de entrega
+            if estado_motor = MOTOR_GIRANDO then
+                if contador_pwm < PULSO_360_GRADOS then
+                    pwm_motor <= '1';
+                else
+                    pwm_motor <= '0';
+                end if;
+            else
+                if contador_pwm < PULSO_0_GRADOS then
+                    pwm_motor <= '1';
+                else
+                    pwm_motor <= '0';
+                end if;
+            end if;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------------
+    -- MÁQUINA DE ESTADOS PARA DEVOLUCIÓN DE MONEDAS
+    --------------------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            estado_devolucion <= REPOSO;
+            monedas_5_restantes <= 0;
+            monedas_10_restantes <= 0;
+            contador_1seg <= 0;
+            devolucion_activa <= '0';
+            
+        elsif rising_edge(clk) then
+            case estado_devolucion is
+                when REPOSO =>
+                    devolucion_activa <= '0';
+                    if activar_devolucion = '1' then
+                        monedas_5_restantes <= monedas_5_a_devolver;
+                        monedas_10_restantes <= monedas_10_a_devolver;
+                        estado_devolucion <= MOVER_180_5;
+                        devolucion_activa <= '1';
+                        contador_1seg <= 0;
+                    end if;
+                    
+                when MOVER_180_5 =>
+                    if monedas_5_restantes > 0 then
+                        if contador_1seg < 50000000 then  -- 1 segundo
+                            contador_1seg <= contador_1seg + 1;
+                        else
+                            contador_1seg <= 0;
+                            estado_devolucion <= ESPERAR_180_5;
+                        end if;
+                    else
+                        estado_devolucion <= MOVER_180_10;
+                    end if;
+                    
+                when ESPERAR_180_5 =>
+                    if contador_1seg < 50000000 then  -- 1 segundo
+                        contador_1seg <= contador_1seg + 1;
+                    else
+                        contador_1seg <= 0;
+                        monedas_5_restantes <= monedas_5_restantes - 1;
+                        estado_devolucion <= VOLVER_0_5;
+                    end if;
+                    
+                when VOLVER_0_5 =>
+                    if contador_1seg < 50000000 then  -- 1 segundo
+                        contador_1seg <= contador_1seg + 1;
+                    else
+                        contador_1seg <= 0;
+                        estado_devolucion <= ESPERAR_0_5;
+                    end if;
+                    
+                when ESPERAR_0_5 =>
+                    if contador_1seg < 50000000 then  -- 1 segundo
+                        contador_1seg <= contador_1seg + 1;
+                    else
+                        contador_1seg <= 0;
+                        if monedas_5_restantes > 0 then
+                            estado_devolucion <= MOVER_180_5;
+                        else
+                            estado_devolucion <= MOVER_180_10;
+                        end if;
+                    end if;
+                    
+                when MOVER_180_10 =>
+                    if monedas_10_restantes > 0 then
+                        if contador_1seg < 50000000 then  -- 1 segundo
+                            contador_1seg <= contador_1seg + 1;
+                        else
+                            contador_1seg <= 0;
+                            estado_devolucion <= ESPERAR_180_10;
+                        end if;
+                    else
+                        estado_devolucion <= REPOSO;
+                    end if;
+                    
+                when ESPERAR_180_10 =>
+                    if contador_1seg < 50000000 then  -- 1 segundo
+                        contador_1seg <= contador_1seg + 1;
+                    else
+                        contador_1seg <= 0;
+                        monedas_10_restantes <= monedas_10_restantes - 1;
+                        estado_devolucion <= VOLVER_0_10;
+                    end if;
+                    
+                when VOLVER_0_10 =>
+                    if contador_1seg < 50000000 then  -- 1 segundo
+                        contador_1seg <= contador_1seg + 1;
+                    else
+                        contador_1seg <= 0;
+                        estado_devolucion <= ESPERAR_0_10;
+                    end if;
+                    
+                when ESPERAR_0_10 =>
+                    if contador_1seg < 50000000 then  -- 1 segundo
+                        contador_1seg <= contador_1seg + 1;
+                    else
+                        contador_1seg <= 0;
+                        if monedas_10_restantes > 0 then
+                            estado_devolucion <= MOVER_180_10;
+                        else
+                            estado_devolucion <= REPOSO;
+                        end if;
+                    end if;
+                    
+            end case;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------------
+    -- MÁQUINA DE ESTADOS PARA MOTOR DE ENTREGA
+    --------------------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            estado_motor <= MOTOR_APAGADO;
+            contador_3seg <= 0;
+            contador_4seg <= 0;
+            motor_activo_int <= '0';
+            
+        elsif rising_edge(clk) then
+            case estado_motor is
+                when MOTOR_APAGADO =>
+                    motor_activo_int <= '0';
+                    contador_3seg <= 0;
+                    contador_4seg <= 0;
+                    if activar_motor_entrega = '1' and entrega_completada = '0' then
+                        estado_motor <= MOTOR_GIRANDO;
+                        motor_activo_int <= '1';
+                    end if;
+                    
+                when MOTOR_GIRANDO =>
+                    if entrega_completada = '1' then
+                        estado_motor <= MOTOR_APAGADO;
+                    elsif contador_4seg < 200000000 then  -- 4 segundos
+                        contador_4seg <= contador_4seg + 1;
+                    else
+                        contador_4seg <= 0;
+                        estado_motor <= MOTOR_ESPERANDO;
+                    end if;
+                    
+                when MOTOR_ESPERANDO =>
+                    if entrega_completada = '1' then
+                        estado_motor <= MOTOR_APAGADO;
+                    elsif contador_3seg < 150000000 then  -- 3 segundos
+                        contador_3seg <= contador_3seg + 1;
+                    else
+                        contador_3seg <= 0;
+                        estado_motor <= MOTOR_GIRANDO;
+                    end if;
+                    
+            end case;
+        end if;
+    end process;
+
+end architecture;

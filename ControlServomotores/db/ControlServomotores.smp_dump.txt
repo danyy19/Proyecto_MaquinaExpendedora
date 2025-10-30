@@ -1,0 +1,26 @@
+
+State Machine - |ControlServomotores|estado_motor_30
+Name estado_motor_30.MOTOR_ESPERANDO estado_motor_30.MOTOR_GIRANDO estado_motor_30.MOTOR_APAGADO 
+estado_motor_30.MOTOR_APAGADO 0 0 0 
+estado_motor_30.MOTOR_GIRANDO 0 1 1 
+estado_motor_30.MOTOR_ESPERANDO 1 0 1 
+
+State Machine - |ControlServomotores|estado_motor_02
+Name estado_motor_02.MOTOR_ESPERANDO estado_motor_02.MOTOR_GIRANDO estado_motor_02.MOTOR_APAGADO 
+estado_motor_02.MOTOR_APAGADO 0 0 0 
+estado_motor_02.MOTOR_GIRANDO 0 1 1 
+estado_motor_02.MOTOR_ESPERANDO 1 0 1 
+
+State Machine - |ControlServomotores|estado_devolucion
+Name estado_devolucion.FIN_DEVOLUCION estado_devolucion.ESPERAR_0_10 estado_devolucion.VOLVER_0_10 estado_devolucion.ESPERAR_190_10 estado_devolucion.MOVER_190_10 estado_devolucion.ESPERAR_0_5 estado_devolucion.VOLVER_0_5 estado_devolucion.ESPERAR_190_5 estado_devolucion.MOVER_190_5 estado_devolucion.CALCULAR_MONEDAS estado_devolucion.REPOSO 
+estado_devolucion.REPOSO 0 0 0 0 0 0 0 0 0 0 0 
+estado_devolucion.CALCULAR_MONEDAS 0 0 0 0 0 0 0 0 0 1 1 
+estado_devolucion.MOVER_190_5 0 0 0 0 0 0 0 0 1 0 1 
+estado_devolucion.ESPERAR_190_5 0 0 0 0 0 0 0 1 0 0 1 
+estado_devolucion.VOLVER_0_5 0 0 0 0 0 0 1 0 0 0 1 
+estado_devolucion.ESPERAR_0_5 0 0 0 0 0 1 0 0 0 0 1 
+estado_devolucion.MOVER_190_10 0 0 0 0 1 0 0 0 0 0 1 
+estado_devolucion.ESPERAR_190_10 0 0 0 1 0 0 0 0 0 0 1 
+estado_devolucion.VOLVER_0_10 0 0 1 0 0 0 0 0 0 0 1 
+estado_devolucion.ESPERAR_0_10 0 1 0 0 0 0 0 0 0 0 1 
+estado_devolucion.FIN_DEVOLUCION 1 0 0 0 0 0 0 0 0 0 1 

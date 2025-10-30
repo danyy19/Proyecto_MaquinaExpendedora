@@ -1,0 +1,24 @@
+|filtro_sensor
+clk => pulse_i.CLK
+clk => prev_state.CLK
+clk => stable_cnt[0].CLK
+clk => stable_cnt[1].CLK
+clk => sampled.CLK
+clk => sync1.CLK
+clk => sync0.CLK
+reset_n => pulse_i.ACLR
+reset_n => prev_state.ACLR
+reset_n => stable_cnt[0].ACLR
+reset_n => stable_cnt[1].ACLR
+reset_n => sampled.ACLR
+reset_n => sync1.ACLR
+reset_n => sync0.ACLR
+sensor_in => sync0.DATAIN
+tick => pulse_i.OUTPUTSELECT
+tick => sampled.ENA
+tick => stable_cnt[1].ENA
+tick => stable_cnt[0].ENA
+tick => prev_state.ENA
+pulse_out <= pulse_i.DB_MAX_OUTPUT_PORT_TYPE
+
+

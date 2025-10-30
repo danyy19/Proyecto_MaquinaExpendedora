@@ -1,0 +1,313 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+-- ENTIDAD PRINCIPAL
+entity MaquinaExpendedora is
+    port (
+        clk                : in std_logic;
+        reset              : in std_logic;
+        -- Sensores de monedas (reemplazan a los pulsadores)
+        sensor_moneda_5    : in std_logic;  -- Sensor para monedas de 5
+        sensor_moneda_10   : in std_logic;  -- Sensor para monedas de 10
+        -- Resto de entradas (sin cambios)
+        pulsador_confirmar : in std_logic;
+        sw_devolver        : in std_logic;
+        sensor_entrega     : in std_logic;
+        fila_sel           : in std_logic_vector(2 downto 0);
+        columna_sel        : in std_logic_vector(1 downto 0);
+
+        -- Salidas de displays
+        display_credito_decenas  : out std_logic_vector(6 downto 0);
+        display_credito_unidades : out std_logic_vector(6 downto 0);
+        display_fila             : out std_logic_vector(6 downto 0);
+        display_columna          : out std_logic_vector(6 downto 0);
+
+        -- Salidas de LEDs
+        led_entrega_producto : out std_logic;
+        led_alerta_motor     : out std_logic;
+        led_alerta_credito   : out std_logic;
+        led_alerta_stock     : out std_logic;
+        led_devolucion       : out std_logic;
+        luces_decoracion     : out std_logic
+    );
+end entity;
+
+-- ARQUITECTURA PRINCIPAL
+architecture comportamiento of MaquinaExpendedora is
+
+    -- COMPONENTES
+    component DivisorFrecuencia is
+        port (
+            clk     : in std_logic;
+            reset   : in std_logic;
+            clk_1hz : out std_logic
+        );
+    end component;
+
+    component Decodificador7seg is
+        port (
+            numero    : in integer range 0 to 9;
+            segmentos : out std_logic_vector(6 downto 0)
+        );
+    end component;
+
+    component filtro_sensor is
+        generic(
+            N_STABLE     : integer := 3;
+            ACTIVE_LEVEL : std_logic := '1'
+        );
+        port(
+            clk       : in  std_logic;
+            reset_n   : in  std_logic;
+            sensor_in : in  std_logic;
+            tick      : in  std_logic;
+            pulse_out : out std_logic
+        );
+    end component;
+
+    -- SEÑALES INTERNAS
+    signal clk_1hz : std_logic;
+    signal tick_10ms : std_logic;
+    
+    -- Señales para filtrado de sensores
+    signal moneda_5_pulse : std_logic;
+    signal moneda_10_pulse : std_logic;
+    
+    -- Señales de crédito
+    signal credito_actual : unsigned(7 downto 0) := (others => '0');
+    signal credito_int : integer range 0 to 99 := 0;
+    
+    -- Señales de control
+    signal compra_en_proceso : std_logic := '0';
+    
+    -- Señales para displays
+    signal display_decenas, display_unidades : integer range 0 to 9;
+    
+    -- Señales para módulos internos (simplificadas)
+    signal stock_disponible : std_logic := '1';
+    signal precio_actual : integer range 0 to 127 := 0;
+    signal credito_suficiente : std_logic;
+
+begin
+
+    --------------------------------------------------------------------
+    -- DIVISOR DE FRECUENCIA PRINCIPAL (1Hz)
+    --------------------------------------------------------------------
+    U_Divisor : DivisorFrecuencia
+        port map (
+            clk => clk,
+            reset => reset,
+            clk_1hz => clk_1hz
+        );
+
+    --------------------------------------------------------------------
+    -- GENERADOR DE TICK 10ms (para filtrado de sensores)
+    --------------------------------------------------------------------
+    process(clk, reset)
+        variable count : integer := 0;
+    begin
+        if reset = '1' then
+            tick_10ms <= '0';
+            count := 0;
+        elsif rising_edge(clk) then
+            if count = 249999 then   -- 10ms a 25MHz (ajustar según frecuencia real)
+                tick_10ms <= '1';
+                count := 0;
+            else
+                tick_10ms <= '0';
+                count := count + 1;
+            end if;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------
+    -- FILTROS PARA SENSORES DE MONEDAS
+    --------------------------------------------------------------------
+    -- Filtro para moneda de 5 (asumiendo ACTIVE_LEVEL = '0' para sensores FC-51)
+    Filtro5: filtro_sensor
+        generic map(N_STABLE => 3, ACTIVE_LEVEL => '0')
+        port map(
+            clk => clk,
+            reset_n => not reset,
+            sensor_in => sensor_moneda_5,
+            tick => tick_10ms,
+            pulse_out => moneda_5_pulse
+        );
+
+    -- Filtro para moneda de 10
+    Filtro10: filtro_sensor
+        generic map(N_STABLE => 3, ACTIVE_LEVEL => '0')
+        port map(
+            clk => clk,
+            reset_n => not reset,
+            sensor_in => sensor_moneda_10,
+            tick => tick_10ms,
+            pulse_out => moneda_10_pulse
+        );
+
+    --------------------------------------------------------------------
+    -- CONTROL DE CRÉDITO (REEMPLAZA ModuloCredito)
+    --------------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            credito_actual <= (others => '0');
+            compra_en_proceso <= '0';
+        elsif rising_edge(clk) then
+            -- Bloquear durante compra
+            if pulsador_confirmar = '1' then
+                compra_en_proceso <= '1';
+            elsif compra_en_proceso = '1' and sensor_entrega = '1' then
+                compra_en_proceso <= '0';
+                -- Restar precio al crédito cuando se complete la compra
+                if credito_int >= precio_actual then
+                    credito_actual <= to_unsigned(credito_int - precio_actual, 8);
+                end if;
+            end if;
+            
+            -- Sumar monedas solo si no hay compra en proceso
+            if compra_en_proceso = '0' then
+                if moneda_5_pulse = '1' and credito_int <= 94 then
+                    credito_actual <= credito_actual + 5;
+                elsif moneda_10_pulse = '1' and credito_int <= 89 then
+                    credito_actual <= credito_actual + 10;
+                end if;
+            end if;
+            
+            -- Devolución manual
+            if sw_devolver = '1' then
+                credito_actual <= (others => '0');
+            end if;
+        end if;
+    end process;
+
+    -- Conversión a entero para comparaciones
+    credito_int <= to_integer(credito_actual);
+
+    --------------------------------------------------------------------
+    -- LÓGICA DE COMPRA SIMPLIFICADA (REEMPLAZA ModuloCompraControl)
+    --------------------------------------------------------------------
+    process(clk, reset)
+        type estado_compra_t is (ESPERA, PROCESANDO, ENTREGANDO);
+        variable estado_compra : estado_compra_t := ESPERA;
+        variable contador_entrega : integer range 0 to 3 := 0;
+    begin
+        if reset = '1' then
+            estado_compra := ESPERA;
+            contador_entrega := 0;
+            led_entrega_producto <= '0';
+            led_alerta_motor <= '0';
+        elsif rising_edge(clk_1hz) then
+            case estado_compra is
+                when ESPERA =>
+                    led_entrega_producto <= '0';
+                    led_alerta_motor <= '0';
+                    if pulsador_confirmar = '1' and stock_disponible = '1' and credito_suficiente = '1' then
+                        estado_compra := PROCESANDO;
+                        led_alerta_motor <= '1';  -- Activar motor
+                    end if;
+                    
+                when PROCESANDO =>
+                    if sensor_entrega = '1' then
+                        estado_compra := ENTREGANDO;
+                        contador_entrega := 3;  -- 3 segundos de entrega
+                        led_alerta_motor <= '0';
+                        led_entrega_producto <= '1';
+                    end if;
+                    
+                when ENTREGANDO =>
+                    if contador_entrega > 0 then
+                        contador_entrega := contador_entrega - 1;
+                    else
+                        estado_compra := ESPERA;
+                        led_entrega_producto <= '0';
+                    end if;
+                    
+            end case;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------
+    -- LÓGICA DE STOCK Y PRECIOS SIMPLIFICADA
+    --------------------------------------------------------------------
+    process(fila_sel, columna_sel)
+    begin
+        -- Precios fijos según posición (ejemplo)
+        case to_integer(unsigned(fila_sel)) is
+            when 0 => 
+                case to_integer(unsigned(columna_sel)) is
+                    when 0 => precio_actual <= 5;
+                    when 1 => precio_actual <= 10;
+                    when 2 => precio_actual <= 15;
+                    when others => precio_actual <= 0;
+                end case;
+            when 1 => 
+                case to_integer(unsigned(columna_sel)) is
+                    when 0 => precio_actual <= 20;
+                    when 1 => precio_actual <= 25;
+                    when 2 => precio_actual <= 30;
+                    when others => precio_actual <= 0;
+                end case;
+            when others => precio_actual <= 0;
+        end case;
+        
+        -- Stock siempre disponible por ahora (puede expandirse)
+        stock_disponible <= '1';
+    end process;
+
+    -- Verificar si el crédito es suficiente
+    credito_suficiente <= '1' when credito_int >= precio_actual else '0';
+
+    --------------------------------------------------------------------
+    -- ALERTAS Y LUCES DECORATIVAS
+    --------------------------------------------------------------------
+    -- Alerta de crédito insuficiente
+    led_alerta_credito <= '1' when pulsador_confirmar = '1' and credito_suficiente = '0' else '0';
+    
+    -- Alerta de stock (siempre apagada por ahora)
+    led_alerta_stock <= '0';
+    
+    -- Luces decorativas (encendidas cuando hay crédito)
+    luces_decoracion <= '1' when credito_int > 0 else '0';
+    
+    -- LED de devolución (activo durante 2 segundos al devolver)
+    process(clk_1hz, reset)
+        variable contador_devolucion : integer range 0 to 2 := 0;
+    begin
+        if reset = '1' then
+            led_devolucion <= '0';
+            contador_devolucion := 0;
+        elsif rising_edge(clk_1hz) then
+            if sw_devolver = '1' then
+                led_devolucion <= '1';
+                contador_devolucion := 2;
+            elsif contador_devolucion > 0 then
+                contador_devolucion := contador_devolucion - 1;
+                if contador_devolucion = 0 then
+                    led_devolucion <= '0';
+                end if;
+            end if;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------
+    -- DISPLAYS 7 SEGMENTOS
+    --------------------------------------------------------------------
+    -- Convertir crédito a dígitos para display
+    display_decenas <= credito_int / 10;
+    display_unidades <= credito_int mod 10;
+
+    -- Display de crédito
+    U_dec_cred_dec : Decodificador7seg 
+        port map (numero => display_decenas, segmentos => display_credito_decenas);
+    U_dec_cred_uni : Decodificador7seg 
+        port map (numero => display_unidades, segmentos => display_credito_unidades);
+
+    -- Display de fila y columna seleccionada
+    U_dec_fila : Decodificador7seg 
+        port map (numero => to_integer(unsigned(fila_sel)), segmentos => display_fila);
+    U_dec_col  : Decodificador7seg 
+        port map (numero => to_integer(unsigned(columna_sel)), segmentos => display_columna);
+
+end architecture;

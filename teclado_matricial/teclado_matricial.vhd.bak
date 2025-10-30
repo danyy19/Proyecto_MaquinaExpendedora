@@ -1,0 +1,131 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity teclado_matricial is
+    port (
+        clk         : in std_logic;
+        reset       : in std_logic;
+        filas_in    : in std_logic_vector(3 downto 0);
+        columnas_out: out std_logic_vector(3 downto 0);
+        tecla_valida: out std_logic;
+        tecla_codigo: out std_logic_vector(3 downto 0);
+        fila_sel_out: out std_logic_vector(2 downto 0);
+        columna_sel_out: out std_logic_vector(1 downto 0)
+    );
+end teclado_matricial;
+
+architecture rtl of teclado_matricial is
+    signal contador_scan : unsigned(1 downto 0) := "00";
+    signal columnas_reg : std_logic_vector(3 downto 0) := "1110";
+    signal tecla_actual : std_logic_vector(3 downto 0) := "0000";
+    signal tecla_anterior : std_logic_vector(3 downto 0) := "0000";
+    signal debounce_counter : integer range 0 to 100000 := 0;
+    signal tecla_estable : std_logic_vector(3 downto 0) := "0000";
+    
+    -- Mapeo teclas a coordenadas de producto
+    type teclas_a_coordenadas is array (0 to 15) of std_logic_vector(5 downto 0);
+    constant mapeo_teclas : teclas_a_coordenadas := (
+        "000000", -- 0 -> Fila 0, Col 0
+        "000001", -- 1 -> Fila 0, Col 1  
+        "000010", -- 2 -> Fila 0, Col 2
+        "000011", -- 3 -> Fila 1, Col 0
+        "000100", -- 4 -> Fila 1, Col 1
+        "000101", -- 5 -> Fila 1, Col 2
+        "000110", -- 6 -> Fila 2, Col 0
+        "000111", -- 7 -> Fila 2, Col 1
+        "001000", -- 8 -> Fila 2, Col 2
+        "001001", -- 9 -> Fila 3, Col 0
+        "001010", -- A -> Fila 3, Col 1
+        "001011", -- B -> Fila 3, Col 2
+        "001100", -- C -> Fila 4, Col 0
+        "001101", -- D -> Fila 4, Col 1
+        "001110", -- E -> Fila 4, Col 2
+        "001111"  -- F -> Fila 5, Col 0
+    );
+    
+begin
+
+    -- Proceso de escaneo del teclado
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            contador_scan <= "00";
+            columnas_reg <= "1110";
+            tecla_actual <= "0000";
+            tecla_anterior <= "0000";
+            debounce_counter <= 0;
+            tecla_estable <= "0000";
+            tecla_valida <= '0';
+            
+        elsif rising_edge(clk) then
+            -- Escanear columnas
+            case contador_scan is
+                when "00" => columnas_reg <= "1110"; -- Columna 0
+                when "01" => columnas_reg <= "1101"; -- Columna 1  
+                when "10" => columnas_reg <= "1011"; -- Columna 2
+                when "11" => columnas_reg <= "0111"; -- Columna 3
+                when others => columnas_reg <= "1111";
+            end case;
+            
+            -- Leer filas y decodificar tecla
+            case columnas_reg & filas_in is
+                when "11101110" => tecla_actual <= "0001"; -- 1
+                when "11101101" => tecla_actual <= "0100"; -- 4
+                when "11101011" => tecla_actual <= "0111"; -- 7
+                when "11100111" => tecla_actual <= "0000"; -- 0
+                
+                when "11011110" => tecla_actual <= "0010"; -- 2
+                when "11011101" => tecla_actual <= "0101"; -- 5
+                when "11011011" => tecla_actual <= "1000"; -- 8
+                when "11010111" => tecla_actual <= "1111"; -- F
+                
+                when "10111110" => tecla_actual <= "0011"; -- 3
+                when "10111101" => tecla_actual <= "0110"; -- 6
+                when "10111011" => tecla_actual <= "1001"; -- 9
+                when "10110111" => tecla_actual <= "1110"; -- E
+                
+                when "01111110" => tecla_actual <= "1010"; -- A
+                when "01111101" => tecla_actual <= "1011"; -- B
+                when "01111011" => tecla_actual <= "1100"; -- C
+                when "01110111" => tecla_actual <= "1101"; -- D
+                
+                when others => tecla_actual <= "0000"; -- No tecla
+            end case;
+            
+            -- Anti-rebote
+            if tecla_actual = tecla_anterior then
+                if debounce_counter < 100000 then  -- 2ms a 50MHz
+                    debounce_counter <= debounce_counter + 1;
+                else
+                    tecla_estable <= tecla_actual;
+                end if;
+            else
+                debounce_counter <= 0;
+            end if;
+            
+            tecla_anterior <= tecla_actual;
+            
+            -- Detectar flanco de tecla válida
+            if tecla_estable /= "0000" and tecla_anterior = "0000" then
+                tecla_valida <= '1';
+                tecla_codigo <= tecla_estable;
+                
+                -- Convertir tecla a coordenadas de producto
+                if unsigned(tecla_estable) <= 15 then
+                    fila_sel_out <= mapeo_teclas(to_integer(unsigned(tecla_estable)))(5 downto 3);
+                    columna_sel_out <= mapeo_teclas(to_integer(unsigned(tecla_estable)))(2 downto 1);
+                end if;
+            else
+                tecla_valida <= '0';
+            end if;
+            
+            -- Avanzar contador de escaneo
+            contador_scan <= contador_scan + 1;
+            
+        end if;
+    end process;
+
+    columnas_out <= columnas_reg;
+
+end rtl;

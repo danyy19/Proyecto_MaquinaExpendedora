@@ -1,0 +1,30 @@
+-- DECODIFICADOR 7 SEGMENTOS
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity Decodificador7seg is
+    port (
+        numero : in integer range 0 to 9;
+        segmentos : out std_logic_vector(6 downto 0)
+    );
+end entity;
+
+architecture comportamiento of Decodificador7seg is
+begin
+    process(numero)
+    begin
+        case numero is
+            when 0 => segmentos <= "1000000";
+            when 1 => segmentos <= "1111001";
+            when 2 => segmentos <= "0100100";
+            when 3 => segmentos <= "0110000";
+            when 4 => segmentos <= "0011001";
+            when 5 => segmentos <= "0010010";
+            when 6 => segmentos <= "0000010";
+            when 7 => segmentos <= "1111000";
+            when 8 => segmentos <= "0000000";
+            when 9 => segmentos <= "0011000";
+            when others => segmentos <= "1111111";
+        end case;
+    end process;
+end architecture;

@@ -1,0 +1,307 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity ControlTecladoStock is
+    port (
+        clk                : in std_logic;
+        reset              : in std_logic;
+        teclado_filas      : in std_logic_vector(3 downto 0);
+        actualizar_stock   : in std_logic;  -- Nueva señal para actualizar stock
+        fila_compra        : in integer range 0 to 6;  -- Fila del producto comprado
+        columna_compra     : in integer range 0 to 2;  -- Columna del producto comprado
+        
+        teclado_columnas   : out std_logic_vector(3 downto 0);
+        digito_decenas     : out integer range 0 to 9;
+        digito_unidades    : out integer range 0 to 9;
+        codigo_ingresado   : out integer range 0 to 99;
+        precio_actual      : out integer range 0 to 127;
+        stock_disponible   : out std_logic;
+        key_valid          : out std_logic;
+        confirmar_pulsado  : out std_logic;
+        devolver_pulsado   : out std_logic
+    );
+end entity;
+
+architecture comportamiento of ControlTecladoStock is
+
+    -- Stock y precios (exactamente igual al original)
+    type matriz_stock_t is array (0 to 6, 0 to 2) of integer range 0 to 7;
+    signal almacen : matriz_stock_t := (
+        0 => (2, 2, 3),
+        1 => (3, 1, 2),
+        2 => (2, 3, 1),
+        3 => (3, 3, 2),
+        4 => (2, 1, 3),
+        5 => (0, 0, 0),
+        6 => (0, 0, 0)
+    );
+
+    constant precios : matriz_stock_t := (
+        0 => (5, 10, 10),
+        1 => (20, 25, 30),
+        2 => (25, 20, 5),
+        3 => (15, 30, 20),
+        4 => (10, 15, 35),
+        5 => (0, 0, 0),
+        6 => (0, 0, 0)
+    );
+
+    -- Señales para teclado matricial (igual al original)
+    signal col_sel          : unsigned(1 downto 0) := "00";
+    signal key_detected     : std_logic_vector(3 downto 0) := (others => '1');
+    signal key_stable       : std_logic_vector(3 downto 0) := (others => '1');
+    signal key_prev_stable  : std_logic_vector(3 downto 0) := (others => '1');
+    signal columnas_int     : std_logic_vector(3 downto 0);
+    signal slow_clk         : std_logic := '0';
+    signal div_counter      : unsigned(19 downto 0) := (others => '0');
+    
+    -- Sistema de entrada numérica
+    signal digito_decenas_int   : integer range 0 to 9 := 0;
+    signal digito_unidades_int  : integer range 0 to 9 := 0;
+    signal codigo_ingresado_int : integer range 0 to 99 := 0;
+    
+    -- Anti-rebote teclado
+    signal key_prev_raw     : std_logic_vector(3 downto 0) := (others => '1');
+    signal debounce_count   : unsigned(20 downto 0) := (others => '0');
+    signal key_valid_int    : std_logic := '0';
+
+    -- Timer para reset automático
+    signal timer_30seg      : unsigned(27 downto 0) := (others => '0');
+    signal timeout_active   : std_logic := '0';
+
+    -- Señales internas para botones (MANTENER EL ESTADO)
+    signal confirmar_pulsado_int : std_logic := '0';
+    signal devolver_pulsado_int  : std_logic := '0';
+
+begin
+
+    -- Asignar salidas
+    digito_decenas <= digito_decenas_int;
+    digito_unidades <= digito_unidades_int;
+    codigo_ingresado <= codigo_ingresado_int;
+    key_valid <= key_valid_int;
+    confirmar_pulsado <= confirmar_pulsado_int;
+    devolver_pulsado <= devolver_pulsado_int;
+
+    --------------------------------------------------------------------------
+    -- GENERACIÓN DE RELOJ LENTO PARA ESCANEO DEL TECLADO (IGUAL AL ORIGINAL)
+    --------------------------------------------------------------------------
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            div_counter <= div_counter + 1;
+            if div_counter = 0 then
+                slow_clk <= not slow_clk;
+            end if;
+        end if;
+    end process;
+
+    process(slow_clk)
+    begin
+        if rising_edge(slow_clk) then
+            col_sel <= col_sel + 1;
+        end if;
+    end process;
+
+    with col_sel select
+        columnas_int <= "1110" when "00",
+                        "1101" when "01", 
+                        "1011" when "10",
+                        "0111" when others;
+    teclado_columnas <= columnas_int;
+
+    --------------------------------------------------------------------------
+    -- DETECCIÓN DE TECLAS (EXACTAMENTE IGUAL AL ORIGINAL)
+    --------------------------------------------------------------------------
+    process(col_sel, teclado_filas)
+    begin
+        key_detected <= (others => '1');
+        case col_sel is
+            when "00" =>
+                case teclado_filas is
+                    when "1110" => key_detected <= "0001"; -- 1
+                    when "1101" => key_detected <= "0100"; -- 4
+                    when "1011" => key_detected <= "0111"; -- 7
+                    when "0111" => key_detected <= "1110"; -- *
+                    when others => null;
+                end case;
+            when "01" =>
+                case teclado_filas is
+                    when "1110" => key_detected <= "0010"; -- 2
+                    when "1101" => key_detected <= "0101"; -- 5
+                    when "1011" => key_detected <= "1000"; -- 8
+                    when "0111" => key_detected <= "0000"; -- 0
+                    when others => null;
+                end case;
+            when "10" =>
+                case teclado_filas is
+                    when "1110" => key_detected <= "0011"; -- 3
+                    when "1101" => key_detected <= "0110"; -- 6
+                    when "1011" => key_detected <= "1001"; -- 9
+                    when "0111" => key_detected <= "1111"; -- #
+                    when others => null;
+                end case;
+            when others =>
+                case teclado_filas is
+                    when "1110" => key_detected <= "1010"; -- A (Confirmar)
+                    when "1101" => key_detected <= "1011"; -- B (Borrar)
+                    when "1011" => key_detected <= "1100"; -- C (No usado)
+                    when "0111" => key_detected <= "1101"; -- D (Devolver)
+                    when others => null;
+                end case;
+        end case;
+    end process;
+
+    --------------------------------------------------------------------------
+    -- ANTI-REBOTE Y DETECCIÓN DE FLANCO TECLADO (IGUAL AL ORIGINAL)
+    --------------------------------------------------------------------------
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            key_valid_int <= '0';
+            if key_detected = key_prev_raw then
+                if debounce_count < 500000 then
+                    debounce_count <= debounce_count + 1;
+                else
+                    key_stable <= key_detected;
+                end if;
+            else
+                debounce_count <= (others => '0');
+                key_prev_raw <= key_detected;
+            end if;
+
+            -- Flanco de nueva tecla presionada
+            if (key_stable /= key_prev_stable) and (key_stable /= "1111") then
+                key_valid_int <= '1';
+            end if;
+            key_prev_stable <= key_stable;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------------
+    -- ACTUALIZACIÓN DE STOCK
+    --------------------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            -- Reiniciar stock a valores iniciales
+            almacen <= (
+                0 => (2, 2, 3),
+                1 => (3, 1, 2),
+                2 => (2, 3, 1),
+                3 => (3, 3, 2),
+                4 => (2, 1, 3),
+                5 => (0, 0, 0),
+                6 => (0, 0, 0)
+            );
+        elsif rising_edge(clk) then
+            -- Actualizar stock cuando se recibe la señal
+            if actualizar_stock = '1' then
+                if almacen(fila_compra, columna_compra) > 0 then
+                    almacen(fila_compra, columna_compra) <= almacen(fila_compra, columna_compra) - 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------------
+    -- PROCESAMIENTO DE ENTRADA NUMÉRICA Y CONTROL DE STOCK
+    --------------------------------------------------------------------------
+    process(clk, reset)
+        variable fila_int : integer range 0 to 6;
+        variable columna_int : integer range 0 to 2;
+    begin
+        if reset = '1' then
+            digito_decenas_int <= 0;
+            digito_unidades_int <= 0;
+            codigo_ingresado_int <= 0;
+            timer_30seg <= (others => '0');
+            timeout_active <= '0';
+            confirmar_pulsado_int <= '0';
+            devolver_pulsado_int <= '0';
+            precio_actual <= 0;
+            stock_disponible <= '0';
+        elsif rising_edge(clk) then
+
+            -- Timer de 30 segundos para reset automático
+            if timer_30seg < 1500000000 then  -- 30 segundos a 50MHz
+                timer_30seg <= timer_30seg + 1;
+                timeout_active <= '0';
+            else
+                timeout_active <= '1';
+            end if;
+
+            -- PROCESAMIENTO DE ENTRADA NUMÉRICA (COMO EN EL ORIGINAL)
+            if key_valid_int = '1' then
+                timer_30seg <= (others => '0');  -- Reset timer con cada tecla
+
+                case key_stable is
+                    when "1010" =>  -- A = Confirmar compra
+                        confirmar_pulsado_int <= '1';
+                    when "1011" =>  -- B = Borrar entrada
+                        digito_decenas_int <= 0;
+                        digito_unidades_int <= 0;
+                        codigo_ingresado_int <= 0;
+                        confirmar_pulsado_int <= '0';  -- Resetear confirmar
+                        devolver_pulsado_int <= '0';   -- Resetear devolver
+                    when "1101" =>  -- D = Devolver dinero
+                        devolver_pulsado_int <= '1';
+                    when "0000" | "0001" | "0010" | "0011" | "0100" | 
+                         "0101" | "0110" | "0111" | "1000" | "1001" =>
+                        -- Desplazar dígitos como en el primer código
+                        digito_decenas_int <= digito_unidades_int;
+                        digito_unidades_int <= to_integer(unsigned(key_stable));
+                        codigo_ingresado_int <= digito_unidades_int * 10 + to_integer(unsigned(key_stable));
+                        confirmar_pulsado_int <= '0';  -- Resetear al ingresar número
+                        devolver_pulsado_int <= '0';   -- Resetear al ingresar número
+                    when others => 
+                        null;
+                end case;
+            else
+                -- Resetear pulsadores después de ser usados (solo se mantienen un ciclo)
+                confirmar_pulsado_int <= '0';
+                devolver_pulsado_int <= '0';
+            end if;
+
+            -- Reset por timeout
+            if timeout_active = '1' then
+                digito_decenas_int <= 0;
+                digito_unidades_int <= 0;
+                codigo_ingresado_int <= 0;
+                timer_30seg <= (others => '0');
+                confirmar_pulsado_int <= '0';
+                devolver_pulsado_int <= '0';
+            end if;
+            
+            ------------------------------------------------------------------
+            -- DECODIFICAR CÓDIGO INGRESADO Y VERIFICAR STOCK
+            ------------------------------------------------------------------
+            if codigo_ingresado_int <= 62 then  -- Máximo código válido: 62
+                fila_int := codigo_ingresado_int / 10;
+                columna_int := codigo_ingresado_int mod 10;
+                
+                -- Validar que sea una posición válida
+                if fila_int <= 6 and columna_int <= 2 then
+                    -- Obtener precio y stock actual
+                    precio_actual <= precios(fila_int, columna_int);
+                    if almacen(fila_int, columna_int) > 0 then
+                        stock_disponible <= '1';
+                    else
+                        stock_disponible <= '0';
+                    end if;
+                else
+                    -- Posición inválida
+                    stock_disponible <= '0';
+                    precio_actual <= 0;
+                end if;
+            else
+                -- Código inválido
+                stock_disponible <= '0';
+                precio_actual <= 0;
+            end if;
+
+        end if;
+    end process;
+
+end architecture;
